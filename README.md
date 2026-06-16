@@ -19,7 +19,7 @@ The wrappers time each `TrainDeepLearningModel` call and write per-run GPU logs 
 
 ## Requirements
 
-- Windows with **ArcGIS Pro** `[VERSION]`, Image Analyst extension, and Deep Learning Libraries installed.
+- Windows with **ArcGIS Pro** `[VERSION 3.6]`, Image Analyst extension, and Deep Learning Libraries installed.
 - Run with ArcGIS Pro's bundled Python (`arcgispro-py3`).
 - For the Juice run: the **Juice client** installed and on `PATH`, connected to a remote GPU host.
 
