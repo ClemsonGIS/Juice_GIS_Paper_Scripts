@@ -1,12 +1,20 @@
-# Revised train_mb_monkey_wrapper_juice.py (Juice-only enforcement)
-# - Requires "juice run nvidia-smi" to be present; fails otherwise (no fallback to local nvidia-smi)
-# - Strips "MiB" from memory.used column in per-tool GPU CSVs
-# - Appends an Excel-friendly AVERAGE() formula below the memory column
-#
-# Usage (from ArcGIS Pro Python environment):
-#   python train_mb_monkey_wrapper_juice.py PythonTest_ModelBuilder_Juice.py
+"""
+Run an exported ArcGIS ModelBuilder Python script while logging GPU usage through
+the required "juice run nvidia-smi" command.
 
-from pathlib import Path
+Reproducibility notes:
+- Input: one ModelBuilder-exported Python script path passed on the command
+  line.
+- Outputs under RESULTS_ROOT/RUN_ID:
+  results_master.csv records timing, status, and GPU summaries for each tracked
+  tool call; gpu_log_*.csv records sampled GPU utilization and memory; and
+  gpu_proc_*.log records sampled compute-process memory.
+- This wrapper strips "MiB" from per-tool GPU CSV memory values and appends an
+  Excel-friendly AVERAGE() formula below the memory column.
+- Configure RESULTS_ROOT, or PROJECT_ROOT for the default results folder, before
+  running:
+  python train_mb_monkey_wrapper_juice.py PythonTest_ModelBuilder_Juice.py
+"""
 import ast
 import contextlib
 import csv
@@ -17,10 +25,11 @@ import runpy
 import subprocess
 import sys
 import time
-from typing import Union, List
+from pathlib import Path
 
 # CONFIG
-RESULTS_ROOT = Path(r"C:\Christian_JuicePaper\gpu_test\results")
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
+RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", PROJECT_ROOT / "results"))
 RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 RUN_ID = datetime.datetime.now(datetime.timezone.utc).strftime("Run_%Y-%m-%d_T%H-%M-%SZ")
 RUN_DIR = RESULTS_ROOT / RUN_ID
@@ -32,14 +41,21 @@ ALLOWED_TOOL_NAMES = {"TrainDeepLearningModel", "TrainDeepLearningModel_ia"}
 REQUIRED_JUICE_CMD = ["juice", "run", "nvidia-smi"]
 NVIDIA_SMI = None  # will be the required juice command list if available
 
+
 def _try_run_help(cmd_list):
     """Try running '<cmd_list> -h' to validate exists. cmd_list must be a list of tokens."""
     try:
         test_cmd = cmd_list + ["-h"]
-        subprocess.run(test_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        subprocess.run(
+            test_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
         return True
     except Exception:
         return False
+
 
 # Check only the juice command; fail fast if not available
 if _try_run_help(REQUIRED_JUICE_CMD):
@@ -48,13 +64,18 @@ if _try_run_help(REQUIRED_JUICE_CMD):
 else:
     print("ERROR: Could not find or run 'juice run nvidia-smi' on PATH.")
     print("This wrapper is configured to require Juice GPU sampling and will not run without it.")
-    print("Please ensure Juice is installed, on PATH, and that 'juice run nvidia-smi -h' runs successfully.")
+    print(
+        "Please ensure Juice is installed, on PATH, and that "
+        "'juice run nvidia-smi -h' runs successfully."
+    )
     sys.exit(2)
 
 print("Run output directory ->", RUN_DIR)
 
+
 def _safe_name(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._-") or "tool"
+
 
 def _extract_tool_paths(exported_script: Path):
     src = exported_script.read_text(encoding="utf-8")
@@ -81,9 +102,11 @@ def _extract_tool_paths(exported_script: Path):
                 tool_paths.add(path)
     return sorted(tool_paths)
 
+
 def _join_cmd(base, args):
     """Return a full command list suitable for subprocess when base is a list."""
     return list(base) + args
+
 
 def _start_gpu_logging(exp_name: str):
     """Start two nvidia-smi loggers using the juice command. Returns handles dict."""
@@ -91,7 +114,13 @@ def _start_gpu_logging(exp_name: str):
     proc_log = RUN_DIR / f"gpu_proc_{exp_name}.log"
     baseline_pids = _get_compute_app_pids()
     if NVIDIA_SMI is None:
-        return {"p_gpu": None, "p_proc": None, "gpu_csv": gpu_csv, "proc_log": proc_log, "baseline_pids": baseline_pids}
+        return {
+            "p_gpu": None,
+            "p_proc": None,
+            "gpu_csv": gpu_csv,
+            "proc_log": proc_log,
+            "baseline_pids": baseline_pids,
+        }
 
     cmd_gpu = _join_cmd(NVIDIA_SMI, [
         "--query-gpu=timestamp,utilization.gpu,memory.used",
@@ -118,6 +147,7 @@ def _start_gpu_logging(exp_name: str):
         "proc_log": proc_log,
         "baseline_pids": baseline_pids,
     }
+
 
 def _cleanup_and_postprocess_gpu_csv(gpu_csv: Path):
     """Post-process the GPU CSV to remove 'MiB' from memory column and append AVERAGE() formula."""
@@ -159,6 +189,7 @@ def _cleanup_and_postprocess_gpu_csv(gpu_csv: Path):
             fh.write(average_formula + "\n")
     except Exception:
         return
+
 
 def _stop_gpu_logging(handles):
     """Stop subprocesses and return proc log contents as a string; also post-process gpu csv."""
@@ -216,6 +247,7 @@ def _stop_gpu_logging(handles):
         pass
     return proc_output
 
+
 def _parse_gpu_csv(gpu_csv: Path):
     """Read GPU CSV and compute avg util and max mem (numeric memory column after cleanup).
 
@@ -257,10 +289,11 @@ def _parse_gpu_csv(gpu_csv: Path):
     if nonzero_utils:
         avg_util = round(sum(nonzero_utils) / len(nonzero_utils), 2)
     else:
-        # If there were samples but all were zero, return numeric 0. If no samples, return empty string.
+        # If all samples are zero, return 0. If there are no samples, return "".
         avg_util = round(sum(util_values) / len(util_values), 2) if util_values else ""
     max_mem = int(max(mem_values)) if mem_values else ""
     return avg_util, max_mem
+
 
 def _get_compute_app_pids():
     if NVIDIA_SMI is None:
@@ -281,6 +314,7 @@ def _get_compute_app_pids():
         return out
     except Exception:
         return set()
+
 
 def _parse_avg_filtered_tool_memory(proc_output: str, baseline_pids):
     if not proc_output:
@@ -314,6 +348,7 @@ def _parse_avg_filtered_tool_memory(proc_output: str, baseline_pids):
         return ""
     return round(sum(per_timestamp_sum.values()) / len(per_timestamp_sum), 2)
 
+
 def _append_master_row(row):
     header = [
         "run_id",
@@ -336,6 +371,7 @@ def _append_master_row(row):
             w.writeheader()
         w.writerow(row)
 
+
 def _resolve_attr_path(root_obj, full_path: str):
     parts = full_path.split(".")
     if not parts or parts[0] != "arcpy":
@@ -347,6 +383,7 @@ def _resolve_attr_path(root_obj, full_path: str):
             return None, None
         obj = getattr(obj, part)
     return obj, parts[-1]
+
 
 class _FilteredConsole:
     """Filter duplicate epoch-detail lines while preserving normal training progress output."""
@@ -374,6 +411,7 @@ class _FilteredConsole:
             return
         self.target.write(line)
         self.target.flush()
+
 
 def main(exported_script_path: str):
     exported = Path(exported_script_path)
@@ -430,7 +468,9 @@ def main(exported_script_path: str):
                 else:
                     filtered_stdout = _FilteredConsole(sys.stdout)
                     filtered_stderr = _FilteredConsole(sys.stderr)
-                    with contextlib.redirect_stdout(filtered_stdout), contextlib.redirect_stderr(filtered_stderr):
+                    with contextlib.redirect_stdout(
+                        filtered_stdout
+                    ), contextlib.redirect_stderr(filtered_stderr):
                         result = original_func(*args, **kwargs)
             except Exception as exc:
                 status = "ERROR"
@@ -438,15 +478,21 @@ def main(exported_script_path: str):
                 proc_output = _stop_gpu_logging(handles)
                 t1 = time.time()
                 avg_util, _ = _parse_gpu_csv(handles["gpu_csv"])
-                avg_filtered_mem = _parse_avg_filtered_tool_memory(proc_output, handles.get("baseline_pids", set()))
+                avg_filtered_mem = _parse_avg_filtered_tool_memory(
+                    proc_output, handles.get("baseline_pids", set())
+                )
                 _append_master_row(
                     {
                         "run_id": RUN_ID,
                         "seq": seq,
                         "exp_name": exp_name,
                         "tool_path": tool_path,
-                        "start_time_utc": datetime.datetime.fromtimestamp(t0, datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
-                        "end_time_utc": datetime.datetime.fromtimestamp(t1, datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+                        "start_time_utc": datetime.datetime.fromtimestamp(
+                            t0, datetime.timezone.utc
+                        ).isoformat().replace("+00:00", "Z"),
+                        "end_time_utc": datetime.datetime.fromtimestamp(
+                            t1, datetime.timezone.utc
+                        ).isoformat().replace("+00:00", "Z"),
                         "wall_time_seconds": int(t1 - t0),
                         "avg_global_gpu_util_percent": avg_util,
                         "avg_filtered_tool_gpu_mem_mb": avg_filtered_mem,
@@ -461,15 +507,21 @@ def main(exported_script_path: str):
             proc_output = _stop_gpu_logging(handles)
             t1 = time.time()
             avg_util, _ = _parse_gpu_csv(handles["gpu_csv"])
-            avg_filtered_mem = _parse_avg_filtered_tool_memory(proc_output, handles.get("baseline_pids", set()))
+            avg_filtered_mem = _parse_avg_filtered_tool_memory(
+                proc_output, handles.get("baseline_pids", set())
+            )
             _append_master_row(
                 {
                     "run_id": RUN_ID,
                     "seq": seq,
                     "exp_name": exp_name,
                     "tool_path": tool_path,
-                    "start_time_utc": datetime.datetime.fromtimestamp(t0, datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "end_time_utc": datetime.datetime.fromtimestamp(t1, datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "start_time_utc": datetime.datetime.fromtimestamp(
+                        t0, datetime.timezone.utc
+                    ).isoformat().replace("+00:00", "Z"),
+                    "end_time_utc": datetime.datetime.fromtimestamp(
+                        t1, datetime.timezone.utc
+                    ).isoformat().replace("+00:00", "Z"),
                     "wall_time_seconds": int(t1 - t0),
                     "avg_global_gpu_util_percent": avg_util,
                     "avg_filtered_tool_gpu_mem_mb": avg_filtered_mem,
@@ -525,8 +577,12 @@ def main(exported_script_path: str):
 
     print("Done. Master CSV at:", MASTER_CSV)
 
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: <ArcGIS Python exe> train_mb_monkey_wrapper.py <exported_modelbuilder_script.py>")
+        print(
+            "Usage: <ArcGIS Python exe> train_mb_monkey_wrapper.py "
+            "<exported_modelbuilder_script.py>"
+        )
         sys.exit(1)
     main(sys.argv[1])

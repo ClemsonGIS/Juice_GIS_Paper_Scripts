@@ -1,7 +1,18 @@
-r"""
-Run an exported ArcGIS ModelBuilder Python script while logging GPU usage per tool call.
 """
-from pathlib import Path
+Run an exported ArcGIS ModelBuilder Python script while logging GPU usage per
+TrainDeepLearningModel call.
+
+Reproducibility notes:
+- Input: one ModelBuilder-exported Python script path passed on the command
+  line.
+- Outputs under RESULTS_ROOT/RUN_ID:
+  results_master.csv records timing, status, and GPU summaries for each tracked
+  tool call; gpu_log_*.csv records sampled GPU utilization and memory; and
+  gpu_proc_*.log records sampled compute-process memory.
+- Configure RESULTS_ROOT, or PROJECT_ROOT for the default results folder, before
+  running:
+  python train_mb_monkey_wrapper.py PythonTest_ModelBuilder.py
+"""
 import ast
 import contextlib
 import csv
@@ -12,9 +23,11 @@ import runpy
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 # CONFIG
-RESULTS_ROOT = Path(r"C:\Christian_JuicePaper\gpu_test\results")
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path.cwd()))
+RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", PROJECT_ROOT / "results"))
 RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 RUN_ID = datetime.datetime.now(datetime.UTC).strftime("Run_%Y-%m-%d_T%H-%M-%SZ")
 RUN_DIR = RESULTS_ROOT / RUN_ID
@@ -23,15 +36,25 @@ MASTER_CSV = RUN_DIR / "results_master.csv"
 ALLOWED_TOOL_NAMES = {"TrainDeepLearningModel", "TrainDeepLearningModel_ia"}
 
 POSSIBLES = [
-    r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
-    r"C:\Windows\System32\nvidia-smi.exe",
+    str(
+        Path(os.environ.get("ProgramFiles", "Program Files"))
+        / "NVIDIA Corporation"
+        / "NVSMI"
+        / "nvidia-smi.exe"
+    ),
+    str(Path(os.environ.get("SystemRoot", "Windows")) / "System32" / "nvidia-smi.exe"),
     "nvidia-smi",
 ]
 NVIDIA_SMI = None
 for p in POSSIBLES:
     try:
         if p.lower() == "nvidia-smi":
-            subprocess.run([p, "-h"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            subprocess.run(
+                [p, "-h"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
             NVIDIA_SMI = p
             break
         if Path(p).exists():
@@ -82,7 +105,13 @@ def _start_gpu_logging(exp_name: str):
     proc_log = RUN_DIR / f"gpu_proc_{exp_name}.log"
     baseline_pids = _get_compute_app_pids()
     if NVIDIA_SMI is None:
-        return {"p_gpu": None, "p_proc": None, "gpu_csv": gpu_csv, "proc_log": proc_log, "baseline_pids": baseline_pids}
+        return {
+            "p_gpu": None,
+            "p_proc": None,
+            "gpu_csv": gpu_csv,
+            "proc_log": proc_log,
+            "baseline_pids": baseline_pids,
+        }
 
     cmd_gpu = [
         NVIDIA_SMI,
@@ -380,7 +409,9 @@ def main(exported_script_path: str):
                 else:
                     filtered_stdout = _FilteredConsole(sys.stdout)
                     filtered_stderr = _FilteredConsole(sys.stderr)
-                    with contextlib.redirect_stdout(filtered_stdout), contextlib.redirect_stderr(filtered_stderr):
+                    with contextlib.redirect_stdout(
+                        filtered_stdout
+                    ), contextlib.redirect_stderr(filtered_stderr):
                         result = original_func(*args, **kwargs)
             except Exception as exc:
                 status = "ERROR"
@@ -388,15 +419,21 @@ def main(exported_script_path: str):
                 proc_output = _stop_gpu_logging(handles)
                 t1 = time.time()
                 avg_util, _ = _parse_gpu_csv(handles["gpu_csv"])
-                avg_filtered_mem = _parse_avg_filtered_tool_memory(proc_output, handles.get("baseline_pids", set()))
+                avg_filtered_mem = _parse_avg_filtered_tool_memory(
+                    proc_output, handles.get("baseline_pids", set())
+                )
                 _append_master_row(
                     {
                         "run_id": RUN_ID,
                         "seq": seq,
                         "exp_name": exp_name,
                         "tool_path": tool_path,
-                        "start_time_utc": datetime.datetime.fromtimestamp(t0, datetime.UTC).isoformat().replace("+00:00", "Z"),
-                        "end_time_utc": datetime.datetime.fromtimestamp(t1, datetime.UTC).isoformat().replace("+00:00", "Z"),
+                        "start_time_utc": datetime.datetime.fromtimestamp(
+                            t0, datetime.UTC
+                        ).isoformat().replace("+00:00", "Z"),
+                        "end_time_utc": datetime.datetime.fromtimestamp(
+                            t1, datetime.UTC
+                        ).isoformat().replace("+00:00", "Z"),
                         "wall_time_seconds": int(t1 - t0),
                         "avg_global_gpu_util_percent": avg_util,
                         "avg_filtered_tool_gpu_mem_mb": avg_filtered_mem,
@@ -411,15 +448,21 @@ def main(exported_script_path: str):
             proc_output = _stop_gpu_logging(handles)
             t1 = time.time()
             avg_util, _ = _parse_gpu_csv(handles["gpu_csv"])
-            avg_filtered_mem = _parse_avg_filtered_tool_memory(proc_output, handles.get("baseline_pids", set()))
+            avg_filtered_mem = _parse_avg_filtered_tool_memory(
+                proc_output, handles.get("baseline_pids", set())
+            )
             _append_master_row(
                 {
                     "run_id": RUN_ID,
                     "seq": seq,
                     "exp_name": exp_name,
                     "tool_path": tool_path,
-                    "start_time_utc": datetime.datetime.fromtimestamp(t0, datetime.UTC).isoformat().replace("+00:00", "Z"),
-                    "end_time_utc": datetime.datetime.fromtimestamp(t1, datetime.UTC).isoformat().replace("+00:00", "Z"),
+                    "start_time_utc": datetime.datetime.fromtimestamp(
+                        t0, datetime.UTC
+                    ).isoformat().replace("+00:00", "Z"),
+                    "end_time_utc": datetime.datetime.fromtimestamp(
+                        t1, datetime.UTC
+                    ).isoformat().replace("+00:00", "Z"),
                     "wall_time_seconds": int(t1 - t0),
                     "avg_global_gpu_util_percent": avg_util,
                     "avg_filtered_tool_gpu_mem_mb": avg_filtered_mem,
@@ -478,6 +521,9 @@ def main(exported_script_path: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: <ArcGIS Python exe> train_mb_monkey_wrapper.py <exported_modelbuilder_script.py>")
+        print(
+            "Usage: <ArcGIS Python exe> train_mb_monkey_wrapper.py "
+            "<exported_modelbuilder_script.py>"
+        )
         sys.exit(1)
     main(sys.argv[1])

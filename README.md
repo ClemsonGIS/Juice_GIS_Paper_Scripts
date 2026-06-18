@@ -35,12 +35,25 @@ python train_mb_monkey_wrapper.py PythonTest_ModelBuilder.py
 python train_mb_monkey_wrapper_juice.py PythonTest_ModelBuilder_Juice.py
 ```
 
+## Reproducing Results
+
+Clone the repository, prepare ArcGIS Pro training samples with **Export Training
+Data For Deep Learning**, and set the paths below for your local project. Run the
+local wrapper for a directly attached GPU and the Juice wrapper for the remote GPU
+configuration. Each wrapper creates a timestamped results folder containing
+`results_master.csv`, `gpu_log_*.csv`, and `gpu_proc_*.log`.
+
 ## Configuration
 
-Update the hardcoded paths near the top of each script before running:
+Configure paths with environment variables or by editing the variables near the
+top of each script:
 
-- `RESULTS_ROOT` (wrappers) — where results are written.
-- `_BASE_OUT`, `peaches_training_samples`, and the workspace paths (ModelBuilder scripts) — your project folder and training data.
+- `PROJECT_ROOT` — base folder used for default relative paths.
+- `TRAINING_SAMPLES_DIR` — ArcGIS deep learning training-data export folder.
+- `WORKSPACE_GDB` — ArcGIS workspace/scratch geodatabase.
+- `MODEL_OUTPUT_ROOT` — where trained model outputs are written.
+- `RESULTS_ROOT` — where wrapper benchmark logs are written.
+- `IMAGE_ANALYST_TOOLBOX` — optional override for the ArcGIS Image Analyst toolbox.
 
 Training data is not included. Use **Export Training Data For Deep Learning** in ArcGIS Pro to create your own samples and point the scripts at them.
 
